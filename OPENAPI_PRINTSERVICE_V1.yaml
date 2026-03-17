@@ -1,0 +1,302 @@
+openapi: 3.0.3
+info:
+  title: PrintService API
+  version: 1.0.0
+  description: API for cloud print queue and Windows print agent.
+servers:
+  - url: https://print.example.com/api/print/v1
+tags:
+  - name: Jobs
+  - name: Agents
+paths:
+  /jobs:
+    post:
+      tags: [Jobs]
+      summary: Create print job
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateJobRequest'
+      responses:
+        '200':
+          description: Job created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateJobResponse'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /agents/next:
+    get:
+      tags: [Agents]
+      summary: Reserve next queued job for current agent
+      security:
+        - AgentSignature: []
+      parameters:
+        - $ref: '#/components/parameters/XTimestamp'
+        - $ref: '#/components/parameters/XSignature'
+      responses:
+        '200':
+          description: Reserved job or empty response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NextJobResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /agents/{agentId}/jobs/{jobId}/ack:
+    post:
+      tags: [Agents]
+      summary: Mark job as printed
+      security:
+        - AgentSignature: []
+      parameters:
+        - $ref: '#/components/parameters/AgentId'
+        - $ref: '#/components/parameters/JobId'
+        - $ref: '#/components/parameters/XTimestamp'
+        - $ref: '#/components/parameters/XSignature'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AckRequest'
+      responses:
+        '200':
+          description: Ack accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+
+  /agents/{agentId}/jobs/{jobId}/fail:
+    post:
+      tags: [Agents]
+      summary: Mark job as failed and schedule retry/final fail
+      security:
+        - AgentSignature: []
+      parameters:
+        - $ref: '#/components/parameters/AgentId'
+        - $ref: '#/components/parameters/JobId'
+        - $ref: '#/components/parameters/XTimestamp'
+        - $ref: '#/components/parameters/XSignature'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FailRequest'
+      responses:
+        '200':
+          description: Fail accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+
+  /agents/{agentId}/heartbeat:
+    post:
+      tags: [Agents]
+      summary: Agent online heartbeat
+      security:
+        - AgentSignature: []
+      parameters:
+        - $ref: '#/components/parameters/AgentId'
+        - $ref: '#/components/parameters/XTimestamp'
+        - $ref: '#/components/parameters/XSignature'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HeartbeatRequest'
+      responses:
+        '200':
+          description: Heartbeat accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    AgentSignature:
+      type: apiKey
+      in: header
+      name: X-Agent-Key
+
+  parameters:
+    AgentId:
+      name: agentId
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
+    JobId:
+      name: jobId
+      in: path
+      required: true
+      schema:
+        type: string
+    XTimestamp:
+      name: X-Timestamp
+      in: header
+      required: true
+      schema:
+        type: string
+      description: UNIX epoch seconds.
+    XSignature:
+      name: X-Signature
+      in: header
+      required: true
+      schema:
+        type: string
+      description: HMAC-SHA256 signature.
+
+  responses:
+    Unauthorized:
+      description: Unauthorized
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    ValidationError:
+      description: Validation error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    CreateJobRequest:
+      type: object
+      required: [tenant_code, printer_selector, job_type, content_type, payload]
+      properties:
+        tenant_code:
+          type: string
+        printer_selector:
+          type: string
+        job_type:
+          type: string
+          enum: [raw]
+        content_type:
+          type: string
+          example: text/plain
+        payload:
+          type: string
+        copies:
+          type: integer
+          minimum: 1
+          default: 1
+        priority:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 50
+        idempotency_key:
+          type: string
+
+    CreateJobResponse:
+      type: object
+      properties:
+        job_id:
+          type: string
+        status:
+          type: string
+          enum: [queued]
+
+    NextJobResponse:
+      type: object
+      properties:
+        job:
+          oneOf:
+            - type: 'null'
+            - $ref: '#/components/schemas/ReservedJob'
+
+    ReservedJob:
+      type: object
+      required: [job_id, printer_selector, job_type, content_type, payload, copies, reserved_until]
+      properties:
+        job_id:
+          type: string
+        printer_selector:
+          type: string
+        job_type:
+          type: string
+          enum: [raw]
+        content_type:
+          type: string
+        payload:
+          type: string
+        copies:
+          type: integer
+        reserved_until:
+          type: string
+          format: date-time
+
+    AckRequest:
+      type: object
+      required: [printed_at]
+      properties:
+        printed_at:
+          type: string
+          format: date-time
+        device_info:
+          type: string
+
+    FailRequest:
+      type: object
+      required: [failed_at, error_code, error_message]
+      properties:
+        failed_at:
+          type: string
+          format: date-time
+        error_code:
+          type: string
+        error_message:
+          type: string
+        retryable:
+          type: boolean
+          default: true
+
+    HeartbeatRequest:
+      type: object
+      required: [agent_version, os, hostname]
+      properties:
+        agent_version:
+          type: string
+        os:
+          type: string
+        hostname:
+          type: string
+        printers:
+          type: array
+          items:
+            type: string
+
+    OkResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+          example: true
+
+    ErrorResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        errors:
+          type: object
+          additionalProperties: true
